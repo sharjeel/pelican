@@ -2,20 +2,21 @@
 from __future__ import unicode_literals, print_function
 import six
 
+import codecs
+import errno
+import fnmatch
+import locale
+import logging
 import os
-import re
 import pytz
+import re
 import shutil
 import traceback
-import logging
-import errno
-import locale
-import fnmatch
-from collections import Hashable
-from functools import partial
 
-from codecs import open, BOM_UTF8
+from collections import Hashable
+from contextlib import contextmanager
 from datetime import datetime
+from functools import partial
 from itertools import groupby
 from jinja2 import Markup
 from operator import attrgetter
@@ -215,20 +216,15 @@ def get_date(string):
     raise ValueError('{0!r} is not a valid date'.format(string))
 
 
-class pelican_open(object):
+@contextmanager
+def pelican_open(filename):
     """Open a file and return its content"""
-    def __init__(self, filename):
-        self.filename = filename
 
-    def __enter__(self):
-        with open(self.filename, encoding='utf-8') as infile:
-            content = infile.read()
-        if content[0] == BOM_UTF8.decode('utf8'):
-            content = content[1:]
-        return content
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        pass
+    with codecs.open(filename, encoding='utf-8') as infile:
+        content = infile.read()
+    if content[0] == codecs.BOM_UTF8.decode('utf8'):
+        content = content[1:]
+    yield content
 
 
 def slugify(value, substitutions=()):
@@ -260,7 +256,7 @@ def slugify(value, substitutions=()):
     return value.decode('ascii')
 
 
-def copy(path, source, destination, destination_path=None, overwrite=False):
+def copy(path, source, destination, destination_path=None):
     """Copy path from origin to destination.
 
     The function is able to copy either files or directories.
@@ -269,8 +265,6 @@ def copy(path, source, destination, destination_path=None, overwrite=False):
     :param source: the source dir
     :param destination: the destination dir
     :param destination_path: the destination path (optional)
-    :param overwrite: whether to overwrite the destination if already exists
-                      or not
     """
     if not destination_path:
         destination_path = path
@@ -279,16 +273,27 @@ def copy(path, source, destination, destination_path=None, overwrite=False):
     destination_ = os.path.abspath(
         os.path.expanduser(os.path.join(destination, destination_path)))
 
+    if not os.path.exists(destination_):
+        os.makedirs(destination_)
+
+    def recurse(source, destination):
+        for entry in os.listdir(source):
+            entry_path = os.path.join(source, entry)
+            if os.path.isdir(entry_path):
+                entry_dest = os.path.join(destination, entry)
+                if os.path.exists(entry_dest):
+                    if not os.path.isdir(entry_dest):
+                        raise IOError('Failed to copy {0} a directory.'
+                                      .format(entry_dest))
+                    recurse(entry_path, entry_dest)
+                else:
+                    shutil.copytree(entry_path, entry_dest)
+            else:
+                shutil.copy(entry_path, destination)
+
+
     if os.path.isdir(source_):
-        try:
-            shutil.copytree(source_, destination_)
-            logger.info('copying %s to %s' % (source_, destination_))
-        except OSError:
-            if overwrite:
-                shutil.rmtree(destination_)
-                shutil.copytree(source_, destination_)
-                logger.info('replacement of %s with %s' % (source_,
-                    destination_))
+        recurse(source_, destination_)
 
     elif os.path.isfile(source_):
         dest_dir = os.path.dirname(destination_)

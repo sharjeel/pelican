@@ -19,8 +19,15 @@ class ReaderTest(unittest.TestCase):
 
     def read_file(self, path, **kwargs):
         # Isolate from future API changes to readers.read_file
-        return readers.read_file(
-            base_path=CONTENT_PATH, path=path, settings=get_settings(**kwargs))
+        r = readers.Readers(settings=get_settings(**kwargs))
+        return r.read_file(base_path=CONTENT_PATH, path=path)
+
+
+class DefaultReaderTest(ReaderTest):
+
+    def test_readfile_unknown_extension(self):
+        with self.assertRaises(TypeError):
+            self.read_file(path='article_with_metadata.unknownextension')
 
 
 class RstReaderTest(ReaderTest):
@@ -87,18 +94,18 @@ class RstReaderTest(ReaderTest):
         # Keys of metadata should be lowercase.
         reader = readers.RstReader(settings=get_settings())
         content, metadata = reader.read(
-                _path('article_with_uppercase_metadata.rst'))
+            _path('article_with_uppercase_metadata.rst'))
 
         self.assertIn('category', metadata, 'Key should be lowercase.')
         self.assertEqual('Yeah', metadata.get('category'),
-                          'Value keeps case.')
+                         'Value keeps case.')
 
     def test_typogrify(self):
         # if nothing is specified in the settings, the content should be
         # unmodified
         page = self.read_file(path='article.rst')
-        expected = ('<p>This is some content. With some stuff to '
-                    '&quot;typogrify&quot;.</p>\n<p>Now with added '
+        expected = ('<p>THIS is some content. With some stuff to '
+                    '&quot;typogrify&quot;...</p>\n<p>Now with added '
                     'support for <abbr title="three letter acronym">'
                     'TLA</abbr>.</p>\n')
 
@@ -107,10 +114,11 @@ class RstReaderTest(ReaderTest):
         try:
             # otherwise, typogrify should be applied
             page = self.read_file(path='article.rst', TYPOGRIFY=True)
-            expected = ('<p>This is some content. With some stuff to&nbsp;'
-                        '&#8220;typogrify&#8221;.</p>\n<p>Now with added '
-                        'support for <abbr title="three letter acronym">'
-                        '<span class="caps">TLA</span></abbr>.</p>\n')
+            expected = (
+                '<p><span class="caps">THIS</span> is some content. '
+                'With some stuff to&nbsp;&quot;typogrify&quot;&#8230;</p>\n'
+                '<p>Now with added support for <abbr title="three letter '
+                'acronym"><span class="caps">TLA</span></abbr>.</p>\n')
 
             self.assertEqual(page.content, expected)
         except ImportError:
@@ -147,7 +155,6 @@ class MdReaderTest(ReaderTest):
         for key, value in metadata.items():
             self.assertEqual(value, expected[key], key)
 
-
     @unittest.skipUnless(readers.Markdown, "markdown isn't installed")
     def test_article_with_footnote(self):
         reader = readers.MarkdownReader(settings=get_settings())
@@ -160,7 +167,7 @@ class MdReaderTest(ReaderTest):
             ' with some footnotes'
             '<sup id="fnref:footnote"><a class="footnote-ref" '
             'href="#fn:footnote" rel="footnote">2</a></sup></p>\n'
-            
+
             '<div class="footnote">\n'
             '<hr />\n<ol>\n<li id="fn:1">\n'
             '<p>Numbered footnote&#160;'
@@ -168,8 +175,8 @@ class MdReaderTest(ReaderTest):
             'title="Jump back to footnote 1 in the text">&#8617;</a></p>\n'
             '</li>\n<li id="fn:footnote">\n'
             '<p>Named footnote&#160;'
-            '<a class="footnote-backref" href="#fnref:footnote" rev="footnote" '
-            'title="Jump back to footnote 2 in the text">&#8617;</a></p>\n'
+            '<a class="footnote-backref" href="#fnref:footnote" rev="footnote"'
+            ' title="Jump back to footnote 2 in the text">&#8617;</a></p>\n'
             '</li>\n</ol>\n</div>')
         expected_metadata = {
             'title': 'Article with markdown containing footnotes',
@@ -183,7 +190,6 @@ class MdReaderTest(ReaderTest):
         for key, value in metadata.items():
             self.assertEqual(value, expected_metadata[key], key)
 
-
     @unittest.skipUnless(readers.Markdown, "markdown isn't installed")
     def test_article_with_file_extensions(self):
         reader = readers.MarkdownReader(settings=get_settings())
@@ -192,9 +198,9 @@ class MdReaderTest(ReaderTest):
         content, metadata = reader.read(
             _path('article_with_md_extension.md'))
         expected = (
-                "<h1>Test Markdown File Header</h1>\n"
-                "<h2>Used for pelican test</h2>\n"
-                "<p>The quick brown fox jumped over the lazy dog's back.</p>")
+            "<h1>Test Markdown File Header</h1>\n"
+            "<h2>Used for pelican test</h2>\n"
+            "<p>The quick brown fox jumped over the lazy dog's back.</p>")
         self.assertEqual(content, expected)
         # test to ensure the mkd file extension is being processed by the
         # correct reader
@@ -308,7 +314,7 @@ class AdReaderTest(ReaderTest):
     def test_article_with_asc_options(self):
         # test to ensure the ASCIIDOC_OPTIONS is being used
         reader = readers.AsciiDocReader(
-                dict(ASCIIDOC_OPTIONS=["-a revision=1.0.42"]))
+            dict(ASCIIDOC_OPTIONS=["-a revision=1.0.42"]))
         content, metadata = reader.read(_path('article_with_asc_options.asc'))
         expected = ('<hr>\n<h2><a name="_used_for_pelican_test"></a>Used for'
                     ' pelican test</h2>\n<p>version 1.0.42</p>\n'
@@ -350,6 +356,20 @@ class HTMLReaderTest(ReaderTest):
         for key, value in expected.items():
             self.assertEqual(value, page.metadata[key], key)
 
+    def test_article_with_metadata_and_contents_attrib(self):
+        page = self.read_file(path='article_with_metadata_and_contents.html')
+        expected = {
+            'category': 'yeah',
+            'author': 'Alexis Métaireau',
+            'title': 'This is a super article !',
+            'summary': 'Summary and stuff',
+            'date': datetime.datetime(2010, 12, 2, 10, 14),
+            'tags': ['foo', 'bar', 'foobar'],
+            'custom_field': 'http://notmyidea.org',
+        }
+        for key, value in expected.items():
+            self.assertEqual(value, page.metadata[key], key)
+
     def test_article_with_null_attributes(self):
         page = self.read_file(path='article_with_null_attributes.html')
 
@@ -363,4 +383,4 @@ class HTMLReaderTest(ReaderTest):
         page = self.read_file(path='article_with_uppercase_metadata.html')
         self.assertIn('category', page.metadata, 'Key should be lowercase.')
         self.assertEqual('Yeah', page.metadata.get('category'),
-                          'Value keeps cases.')
+                         'Value keeps cases.')

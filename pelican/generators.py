@@ -13,16 +13,13 @@ from functools import partial
 from itertools import chain, groupby
 from operator import attrgetter, itemgetter
 
-from jinja2 import (
-        Environment, FileSystemLoader, PrefixLoader, ChoiceLoader, BaseLoader,
-        TemplateNotFound
-)
+from jinja2 import (Environment, FileSystemLoader, PrefixLoader, ChoiceLoader,
+                    BaseLoader, TemplateNotFound)
 
 from pelican.contents import Article, Page, Static, is_valid_content
-from pelican.readers import read_file
+from pelican.readers import Readers
 from pelican.utils import copy, process_translations, mkdir_p, DateFormatter
 from pelican import signals
-import pelican.utils
 
 
 logger = logging.getLogger(__name__)
@@ -31,23 +28,23 @@ logger = logging.getLogger(__name__)
 class Generator(object):
     """Baseclass generator"""
 
-    def __init__(self, context, settings, path, theme, output_path, markup,
-                 **kwargs):
+    def __init__(self, context, settings, path, theme, output_path, **kwargs):
         self.context = context
         self.settings = settings
         self.path = path
         self.theme = theme
         self.output_path = output_path
-        self.markup = markup
 
         for arg, value in kwargs.items():
             setattr(self, arg, value)
+
+        self.readers = Readers(self.settings)
 
         # templates cache
         self._templates = {}
         self._templates_path = []
         self._templates_path.append(os.path.expanduser(
-                os.path.join(self.theme, 'templates')))
+            os.path.join(self.theme, 'templates')))
         self._templates_path += self.settings['EXTRA_TEMPLATES_PATHS']
 
         theme_path = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +53,7 @@ class Generator(object):
                                          "themes", "simple", "templates"))
         self.env = Environment(
             trim_blocks=True,
+            lstrip_blocks=True,
             loader=ChoiceLoader([
                 FileSystemLoader(self._templates_path),
                 simple_loader,  # implicit inheritance
@@ -84,9 +82,8 @@ class Generator(object):
             try:
                 self._templates[name] = self.env.get_template(name + '.html')
             except TemplateNotFound:
-                raise Exception(
-                        ('[templates] unable to load %s.html from %s'
-                         % (name, self._templates_path)))
+                raise Exception('[templates] unable to load %s.html from %s'
+                                % (name, self._templates_path))
         return self._templates[name]
 
     def _include_path(self, path, extensions=None):
@@ -97,7 +94,7 @@ class Generator(object):
             extensions are allowed)
         """
         if extensions is None:
-            extensions = tuple(self.markup)
+            extensions = tuple(self.readers.extensions)
         basename = os.path.basename(path)
         if extensions is False or basename.endswith(extensions):
             return True
@@ -167,7 +164,8 @@ class TemplatePagesGenerator(Generator):
             try:
                 template = self.env.get_template(source)
                 rurls = self.settings['RELATIVE_URLS']
-                writer.write_file(dest, template, self.context, rurls)
+                writer.write_file(dest, template, self.context, rurls,
+                                  override_output=True)
             finally:
                 del self.env.loader.loaders[0]
 
@@ -261,7 +259,8 @@ class ArticlesGenerator(Generator):
         """Generate the articles."""
         for article in chain(self.translations, self.articles):
             write(article.save_as, self.get_template(article.template),
-                self.context, article=article, category=article.category)
+                self.context, article=article, category=article.category,
+                override_output=hasattr(article, 'override_save_as'))
 
     def generate_period_archives(self, write):
         """Generate per-year, per-month, and per-day archives."""
@@ -334,6 +333,7 @@ class ArticlesGenerator(Generator):
         """Generate category pages."""
         category_template = self.get_template('category')
         for cat, articles in self.categories:
+            articles.sort(key=attrgetter('date'), reverse=True)
             dates = [article for article in self.dates if article in articles]
             write(cat.save_as, category_template, self.context,
                 category=cat, articles=articles, dates=dates,
@@ -344,6 +344,7 @@ class ArticlesGenerator(Generator):
         """Generate Author pages."""
         author_template = self.get_template('author')
         for aut, articles in self.authors:
+            articles.sort(key=attrgetter('date'), reverse=True)
             dates = [article for article in self.dates if article in articles]
             write(aut.save_as, author_template, self.context,
                 author=aut, articles=articles, dates=dates,
@@ -383,9 +384,9 @@ class ArticlesGenerator(Generator):
                 self.settings['ARTICLE_DIR'],
                 exclude=self.settings['ARTICLE_EXCLUDES']):
             try:
-                article = read_file(
+                article = self.readers.read_file(
                     base_path=self.path, path=f, content_class=Article,
-                    settings=self.settings, context=self.context,
+                    context=self.context,
                     preread_signal=signals.article_generator_preread,
                     preread_sender=self,
                     context_signal=signals.article_generator_context,
@@ -491,9 +492,9 @@ class PagesGenerator(Generator):
                 self.settings['PAGE_DIR'],
                 exclude=self.settings['PAGE_EXCLUDES']):
             try:
-                page = read_file(
+                page = self.readers.read_file(
                     base_path=self.path, path=f, content_class=Page,
-                    settings=self.settings, context=self.context,
+                    context=self.context,
                     preread_signal=signals.page_generator_preread,
                     preread_sender=self,
                     context_signal=signals.page_generator_context,
@@ -530,7 +531,8 @@ class PagesGenerator(Generator):
                             self.hidden_translations, self.hidden_pages):
             writer.write_file(page.save_as, self.get_template(page.template),
                     self.context, page=page,
-                    relative_urls=self.settings['RELATIVE_URLS'])
+                    relative_urls=self.settings['RELATIVE_URLS'],
+                    override_output=hasattr(page, 'override_save_as'))
 
 
 class StaticGenerator(Generator):
@@ -542,7 +544,7 @@ class StaticGenerator(Generator):
         """Copy all the paths from source to destination"""
         for path in paths:
             copy(path, source, os.path.join(output_path, destination),
-                 final_path, overwrite=True)
+                 final_path)
 
     def generate_context(self):
         self.staticfiles = []
@@ -551,73 +553,28 @@ class StaticGenerator(Generator):
         for static_path in self.settings['STATIC_PATHS']:
             for f in self.get_files(
                     static_path, extensions=False):
-                static = read_file(
+                static = self.readers.read_file(
                     base_path=self.path, path=f, content_class=Static,
-                    fmt='static',
-                    settings=self.settings, context=self.context,
+                    fmt='static', context=self.context,
                     preread_signal=signals.static_generator_preread,
                     preread_sender=self,
                     context_signal=signals.static_generator_context,
                     context_sender=self)
                 self.staticfiles.append(static)
                 self.add_source_path(static)
+        self._update_context(('staticfiles',))
 
     def generate_output(self, writer):
         self._copy_paths(self.settings['THEME_STATIC_PATHS'], self.theme,
-                         'theme', self.output_path, os.curdir)
+                         self.settings['THEME_STATIC_DIR'], self.output_path,
+                         os.curdir)
         # copy all Static files
-        for sc in self.staticfiles:
+        for sc in self.context['staticfiles']:
             source_path = os.path.join(self.path, sc.source_path)
             save_as = os.path.join(self.output_path, sc.save_as)
             mkdir_p(os.path.dirname(save_as))
             shutil.copy(source_path, save_as)
             logger.info('copying {} to {}'.format(sc.source_path, sc.save_as))
-
-
-class PdfGenerator(Generator):
-    """Generate PDFs on the output dir, for all articles and pages coming from
-    rst"""
-    def __init__(self, *args, **kwargs):
-        super(PdfGenerator, self).__init__(*args, **kwargs)
-        try:
-            from rst2pdf.createpdf import RstToPdf
-            pdf_style_path = os.path.join(self.settings['PDF_STYLE_PATH'])
-            pdf_style = self.settings['PDF_STYLE']
-            self.pdfcreator = RstToPdf(breakside=0,
-                                       stylesheets=[pdf_style],
-                                       style_path=[pdf_style_path])
-        except ImportError:
-            raise Exception("unable to find rst2pdf")
-
-    def _create_pdf(self, obj, output_path):
-        if obj.source_path.endswith('.rst'):
-            filename = obj.slug + ".pdf"
-            output_pdf = os.path.join(output_path, filename)
-            # print('Generating pdf for', obj.source_path, 'in', output_pdf)
-            with open(obj.source_path) as f:
-                self.pdfcreator.createPdf(text=f.read(), output=output_pdf)
-            logger.info(' [ok] writing %s' % output_pdf)
-
-    def generate_context(self):
-        pass
-
-    def generate_output(self, writer=None):
-        # we don't use the writer passed as argument here
-        # since we write our own files
-        logger.info(' Generating PDF files...')
-        pdf_path = os.path.join(self.output_path, 'pdf')
-        if not os.path.exists(pdf_path):
-            try:
-                os.mkdir(pdf_path)
-            except OSError:
-                logger.error("Couldn't create the pdf output folder in " +
-                             pdf_path)
-
-        for article in self.context['articles']:
-            self._create_pdf(article, pdf_path)
-
-        for page in self.context['pages']:
-            self._create_pdf(page, pdf_path)
 
 
 class SourceFileGenerator(Generator):

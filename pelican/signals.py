@@ -8,6 +8,10 @@ initialized = signal('pelican_initialized')
 get_generators = signal('get_generators')
 finalized = signal('pelican_finalized')
 
+# Reader-level signals
+
+readers_init = signal('readers_init')
+
 # Generator-level signals
 
 generator_init = signal('generator_init')
@@ -33,3 +37,6 @@ static_generator_preread = signal('static_generator_preread')
 static_generator_context = signal('static_generator_context')
 
 content_object_init = signal('content_object_init')
+
+# Writers signals
+content_written = signal('content_written')

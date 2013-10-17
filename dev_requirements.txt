@@ -7,3 +7,7 @@ BeautifulSoup4
 lxml
 typogrify
 dateutil
+
+# To perform release
+bumpr==0.2.0
+
