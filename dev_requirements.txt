@@ -6,3 +6,4 @@ Markdown
 BeautifulSoup4
 lxml
 typogrify
+dateutil

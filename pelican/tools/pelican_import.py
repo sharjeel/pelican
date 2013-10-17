@@ -106,6 +106,11 @@ def wp2fields(xml):
                  '"BeautifulSoup4" and "lxml" required to import Wordpress XML files.')
         sys.exit(error)
 
+    try:
+        from dateutil import parser
+        parse_str_to_date = lambda d: tuple(parser.parse(d).timetuple())
+    except ImportError:
+        parse_str_to_date = lambda d: time.strptime(raw_date, "%Y-%m-%d %H:%M:%S")
 
     with open(xml, encoding='utf-8') as infile:
         xmlfile = infile.read()
@@ -127,7 +132,7 @@ def wp2fields(xml):
             filename = item.find('post_name').string
 
             raw_date = item.find('post_date').string
-            date_object = time.strptime(raw_date, "%Y-%m-%d %H:%M:%S")
+            date_object = parse_str_to_date(raw_date)
             date = time.strftime("%Y-%m-%d %H:%M", date_object)
             author = item.find('creator').string
  
@@ -460,6 +465,12 @@ def fields2pelican(fields, out_markup, output_path,
         dirpage=False, filename_template=None, filter_author=None):
     for (title, content, filename, date, author, categories, tags,
             kind, in_markup) in fields:
+
+        if not filename:
+            print ("Filename not found for title " + title)
+            continue
+
+        
         if filter_author and filter_author != author:
             continue
         slug = not disable_slugs and filename or None
@@ -632,3 +643,6 @@ def main():
                    strip_raw=args.strip_raw or False,
                    disable_slugs=args.disable_slugs or False,
                    filter_author=args.author)
+
+if __name__ == '__main__':
+    main()
